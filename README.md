@@ -70,6 +70,48 @@ You can see the full documentation and list of examples at [pkg.go.dev](https://
 - `Must`: can be used to wrap `Parse.*` calls to panic on error
 - `GetFieldParams`: get the `env` parsed options for a type
 - `GetFieldParamsWithOptions`: get the `env` parsed options for a type with custom options
+- `Plan` / `PlanWithOptions`: resolve the environment into a `ParsePlan` without modifying the destination
+- `NewPlanner` / `NewPlannerWithOptions`: plan and commit configuration reloads with generation ordering
+
+### Two-phase parsing
+
+`Parse` is all-or-nothing: it resolves and validates every field against a
+private copy of the destination, and only writes the struct in a single
+assignment when nothing failed. If any variable is missing or cannot be
+converted, the destination keeps its previous values.
+
+Configuration reloads can go one step further and inspect the plan before
+committing it:
+
+```go
+var cfg Config
+planner := env.NewPlanner(&cfg)
+defer planner.Close()
+
+plan, err := planner.Plan() // does not modify cfg
+if err != nil {
+    log.Println(plan) // redacted, field-by-field diagnostics
+    return
+}
+for _, change := range plan.Changes() {
+    log.Println(change) // e.g. Server.Port (SERVER_PORT): 8080 -> 9090
+}
+if err := planner.Commit(plan); err != nil {
+    return err // ErrStalePlan, ErrPlanClosed, ...
+}
+```
+
+Each plan reports, for every field, the source variable, whether the value
+came from `envDefault`, whether it overwrites a non-zero value, and a
+redacted summary of the change. Values of variables whose names look like
+secrets (`PASSWORD`, `TOKEN`, `SECRET`, `KEY`, ...) are masked; set
+`Options.RedactFunc` to choose the variables yourself.
+
+Plans created through a `Planner` carry increasing generations. Committing an
+older plan after a newer one fails with `ErrStalePlan` and leaves the newer
+values in place, so a slow reload can never overwrite a fresh one. Planning
+itself is read-only and may run concurrently. After `Planner.Close`, no plan
+can modify the destination anymore.
 
 ### Supported types
 
@@ -134,6 +176,7 @@ There are a few options available in the functions that end with `WithOptions`:
 - `Prefix`: prefix to be used in all environment variables
 - `UseFieldNameByDefault`: defines whether or not `env` should use the field name by default if the `env` key is missing
 - `FuncMap`: custom parse functions for custom types
+- `RedactFunc`: marks variables whose values must be masked in plan diagnostics
 
 ### Documentation and examples
 

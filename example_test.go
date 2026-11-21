@@ -269,9 +269,11 @@ func ExampleParseWithOptions_allFieldsRequired() {
 	}); err != nil {
 		fmt.Println(err)
 	}
+	// Because parsing failed, cfg keeps its previous (zero) values: the
+	// default for Username is not applied to a partially parsed struct.
 	fmt.Printf("%+v\n", cfg)
 	// Output: env: required environment variable "EX_PASSWORD" is not set
-	// {Username:admin Password:}
+	// {Username: Password:}
 }
 
 // Set a custom environment.
@@ -451,9 +453,11 @@ func ExampleParse_errorHandling() {
 	}
 
 	fmt.Printf("%+v", cfg)
+	// Parsing is all-or-nothing: since the password is empty, the default
+	// for Username is not applied either.
 	// Output: oopsie
 	// daisy
-	// {Username:admin Password:}
+	// {Username: Password:}
 }
 
 // You can avoid setting defaults for non zero values
@@ -493,4 +497,42 @@ func Example_parseEmptyEnvFallsBackToDefault() {
 
 	fmt.Println(cfg.Foo)
 	// Output: fallback
+}
+
+// Plan an update without touching the destination, inspect the redacted
+// changes, and only then apply it. Useful for hot config reloads.
+func ExampleParsePlan() {
+	type Config struct {
+		Port     int    `env:"EX_PLAN_PORT"`
+		Password string `env:"EX_PLAN_PASSWORD"`
+	}
+
+	cfg := Config{Port: 8080}
+
+	plan, err := PlanWithOptions(&cfg, Options{
+		Environment: map[string]string{
+			"EX_PLAN_PORT":     "9090",
+			"EX_PLAN_PASSWORD": "hunter2",
+		},
+	})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// The destination is untouched while planning.
+	fmt.Printf("before: %+v\n", cfg)
+	for _, change := range plan.Changes() {
+		fmt.Println(change)
+	}
+
+	if err := plan.Apply(); err != nil {
+		fmt.Println(err)
+		return
+	}
+	fmt.Printf("after: %+v\n", cfg)
+	// Output: before: {Port:8080 Password:}
+	// Port (EX_PLAN_PORT): 8080 -> 9090 (overrides existing value)
+	// Password (EX_PLAN_PASSWORD): "" -> ******(len=7)
+	// after: {Port:9090 Password:hunter2}
 }
